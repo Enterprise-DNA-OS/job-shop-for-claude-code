@@ -1,11 +1,91 @@
 [
   {
-    "name": "example",
-    "title": "TODO(author): the first document this industry must produce",
-    "for_each": "select gen_random_uuid() as id, 'Example' as name",
+    "name": "invoice",
+    "title": "Tax invoice",
+    "for_each": "select i.id, (i.number || ' ' || c.name) as name from invoices i join customers c on c.id = i.customer_id where i.status <> 'paid' order by i.issued_on desc",
     "file": "name",
     "sections": [
-      { "title": "Details", "sql": "select 'replace me' as item, $1::text as record_id" }
+      {
+        "title": "Invoice",
+        "note": "Rendered from the job record. Check it, then send it yourself: this system never sends anything.",
+        "sql": "select i.number, c.name as billed_to, j.ref as job, j.title as for_work, coalesce(j.po_number, '') as order_no, to_char(i.issued_on, 'DD Month YYYY') as issued, to_char(i.due_on, 'DD Month YYYY') as due, to_char(i.total_cents / 100.0, 'FM$999,999,990.00') as total, case when i.retention_cents > 0 then to_char(i.retention_cents / 100.0, 'FM$999,999,990.00') else '' end as retention from invoices i join customers c on c.id = i.customer_id join jobs j on j.id = i.job_id where i.id = $1"
+      },
+      {
+        "title": "Lines",
+        "sql": "select il.description, to_char(il.amount_cents / 100.0, 'FM$999,999,990.00') as amount from invoice_lines il where il.invoice_id = $1 order by il.created_at"
+      },
+      {
+        "title": "Payment claim statement",
+        "note": "This section renders only when the invoice is flagged as a payment claim.",
+        "sql": "select 'This payment claim is made under the Construction Contracts Act 2002.' as statement, 'The claimed amount is the total above, for the construction work identified on this invoice, for the period to the issue date.' as claimed_amount, 'If you do not respond with a payment schedule by the due date, the claimed amount becomes payable in full and is recoverable as a debt due (ss 20 to 23 of the Act).' as consequence from invoices where id = $1 and payment_claim"
+      }
+    ]
+  },
+  {
+    "name": "quote",
+    "title": "Quotation (draft)",
+    "for_each": "select j.id, (j.ref || ' ' || c.name) as name from jobs j join customers c on c.id = j.customer_id where j.status = 'quote' order by j.quoted_on",
+    "file": "name",
+    "sections": [
+      {
+        "title": "This is a draft. Nothing has been sent.",
+        "note": "Put it on your letterhead, attach your terms, and send it yourself. Retention-of-title terms are worth registering on the PPSR before the account owes real money.",
+        "sql": "select c.name as for_customer, coalesce(c.contact_name, '') as attention, j.ref as our_reference, j.title as job, coalesce(j.description, '') as scope, case when j.charge_basis = 'fixed' then to_char(j.quoted_cents / 100.0, 'FM$999,999,990.00') || ' plus GST' else 'Charged as time and materials at our current rates' end as price, to_char(j.quoted_on, 'DD Month YYYY') as quoted, coalesce(to_char(j.promised_on, 'DD Month YYYY'), 'to be agreed on acceptance') as delivery from jobs j join customers c on c.id = j.customer_id where j.id = $1"
+      },
+      {
+        "title": "Allowed materials",
+        "sql": "select it.code, it.description as material, jl.qty_planned as qty, it.unit from job_lines jl join items it on it.id = jl.item_id where jl.job_id = $1 order by it.code"
+      }
+    ]
+  },
+  {
+    "name": "job-traveller",
+    "title": "Job traveller",
+    "for_each": "select j.id, (j.ref || ' ' || c.name) as name from jobs j join customers c on c.id = j.customer_id where j.status in ('accepted', 'in-progress', 'on-hold') order by j.promised_on nulls last",
+    "file": "name",
+    "sections": [
+      {
+        "title": "The job",
+        "note": "One traveller per open job: the card the floor works from. On a structural job every traceable issue records its heat number.",
+        "sql": "select j.ref, c.name as customer, j.title, coalesce(j.description, '') as scope, coalesce(j.po_number, '') as their_po, case when j.structural then 'YES: heat numbers required on traceable material' else 'no' end as structural, case when j.charge_basis = 'fixed' then to_char(j.quoted_cents / 100.0, 'FM$999,999,990.00') else 'time and materials' end as price, coalesce(to_char(j.promised_on, 'DD Month YYYY'), 'no date promised') as promised from jobs j join customers c on c.id = j.customer_id where j.id = $1"
+      },
+      {
+        "title": "Materials: planned against issued",
+        "sql": "select it.code, it.description as material, jl.qty_planned as planned, coalesce((select sum(i.qty) from issues i where i.job_id = jl.job_id and i.item_id = jl.item_id), 0) as issued, it.unit, case when it.traceable then 'heat no required' else '' end as cert from job_lines jl join items it on it.id = jl.item_id where jl.job_id = $1 order by it.code"
+      },
+      {
+        "title": "Issued, with heat numbers",
+        "sql": "select to_char(i.issued_on, 'DD Mon YYYY') as date, it.code, it.description as material, i.qty, coalesce(i.heat_no, '') as heat_no from issues i join items it on it.id = i.item_id where i.job_id = $1 order by i.issued_on"
+      },
+      {
+        "title": "Hours booked",
+        "sql": "select to_char(t.worked_on, 'DD Mon YYYY') as date, s.full_name as who, coalesce(w.code, '') as centre, t.hours, coalesce(t.note, '') as note from time_entries t join staff s on s.id = t.staff_id left join work_centres w on w.id = t.work_centre_id where t.job_id = $1 order by t.worked_on"
+      }
+    ]
+  },
+  {
+    "name": "job-cost-report",
+    "title": "Job cost report",
+    "for_each": "select jc.job_id as id, (jc.ref || ' ' || c.name) as name from v_job_cost jc join customers c on c.id = jc.customer_id where jc.status in ('complete', 'closed') order by jc.ref desc",
+    "file": "name",
+    "sections": [
+      {
+        "title": "The job, costed",
+        "note": "What it really cost against what it billed. The re-quoting conversation starts here.",
+        "sql": "select jc.ref, c.name as customer, jc.title, jc.status, case when jc.charge_basis = 'fixed' then to_char(jc.quoted_cents / 100.0, 'FM$999,999,990.00') else 'time and materials' end as quoted, to_char(jc.material_cost_cents / 100.0, 'FM$999,999,990.00') as materials, jc.labour_hours || 'h' as hours, to_char(jc.labour_cost_cents / 100.0, 'FM$999,999,990.00') as labour, to_char(jc.outwork_cost_cents / 100.0, 'FM$999,999,990.00') as outwork, to_char(jc.total_cost_cents / 100.0, 'FM$999,999,990.00') as total_cost, to_char(jc.invoiced_cents / 100.0, 'FM$999,999,990.00') as invoiced, to_char((jc.charge_value_cents - jc.total_cost_cents) / 100.0, 'FM$999,999,990.00') as margin from v_job_cost jc join customers c on c.id = jc.customer_id where jc.job_id = $1"
+      },
+      {
+        "title": "Materials issued",
+        "sql": "select to_char(i.issued_on, 'DD Mon YYYY') as date, it.code, it.description as material, i.qty, to_char(i.unit_cost_cents / 100.0, 'FM$999,990.00') as unit_cost, to_char(round(i.qty * i.unit_cost_cents) / 100.0, 'FM$999,999,990.00') as cost, coalesce(i.heat_no, '') as heat_no from issues i join items it on it.id = i.item_id where i.job_id = $1 order by i.issued_on"
+      },
+      {
+        "title": "Labour",
+        "sql": "select to_char(t.worked_on, 'DD Mon YYYY') as date, s.full_name as who, t.hours, to_char(t.cost_rate_cents / 100.0, 'FM$999,990.00') as cost_rate, to_char(round(t.hours * t.cost_rate_cents) / 100.0, 'FM$999,999,990.00') as cost from time_entries t join staff s on s.id = t.staff_id where t.job_id = $1 order by t.worked_on"
+      },
+      {
+        "title": "Outwork and bought-in services",
+        "sql": "select po.ref, s.name as supplier, pl.description, to_char(round(pl.qty * pl.unit_cost_cents) / 100.0, 'FM$999,999,990.00') as cost from po_lines pl join purchase_orders po on po.id = pl.po_id join suppliers s on s.id = po.supplier_id where po.job_id = $1 and po.status = 'received' order by po.received_on"
+      }
     ]
   }
 ]

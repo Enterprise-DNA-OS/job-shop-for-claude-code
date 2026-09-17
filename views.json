@@ -1,13 +1,62 @@
 [
   {
-    "name": "week",
-    "title": "This week",
-    "subtitle": "Job Shop for Claude Code: what needs attention, rendered by npm run view",
+    "name": "shop",
+    "title": "The shop",
+    "subtitle": "Job Shop for Claude Code: what needs a decision, the job board, shortages and the work centres. Rendered by npm run view.",
     "sections": [
       {
-        "title": "Needs attention",
-        "note": "TODO(author): point this at the industry's attention view (overdue, stuck, quiet).",
-        "sql": "select 'replace me' as item, 'TODO(author)' as why"
+        "title": "Needs a decision",
+        "note": "Missing heat numbers, overdue services, quotes being eaten, late promises, money asleep. Worst first.",
+        "sql": "select case reason when 'heat_missing' then 'NO HEAT NUMBER, STRUCTURAL' when 'plant_service_overdue' then 'Work centre service overdue' when 'quote_burnt' then 'Quote nearly eaten' when 'job_late' then 'Past the promise date' when 'shortage_blocking' then 'Short of material' when 'po_overdue' then 'PO overdue' when 'job_stalled' then 'Job gone quiet' when 'complete_not_invoiced' then 'Finished, not billed' when 'invoice_overdue' then 'Invoice overdue' when 'payment_claim_missing' then 'No payment claim on construction work' when 'retention_due' then 'Retention due back' when 'invoice_draft' then 'Draft never sent' when 'over_credit_limit' then 'Over the credit limit' when 'ppsr_unregistered' then 'Owing five figures, no PPSR' when 'below_reorder' then 'Through the reorder level' when 'timesheet_gap' then 'Time not booked' when 'quote_stale' then 'Quote going cold' when 'task_overdue' then 'Task overdue' else reason end as what, label as record, customer, item as code, days, case when amount_cents > 0 then to_char(amount_cents / 100.0, 'FM$999,999,990') else '' end as value, detail from v_attention order by case reason when 'heat_missing' then 1 when 'plant_service_overdue' then 2 when 'quote_burnt' then 3 when 'job_late' then 4 when 'shortage_blocking' then 5 when 'po_overdue' then 6 when 'job_stalled' then 7 when 'complete_not_invoiced' then 8 when 'invoice_overdue' then 9 when 'payment_claim_missing' then 10 when 'retention_due' then 11 when 'invoice_draft' then 12 when 'over_credit_limit' then 13 when 'ppsr_unregistered' then 14 when 'below_reorder' then 15 when 'timesheet_gap' then 16 when 'quote_stale' then 17 else 18 end, days desc nulls last"
+      },
+      {
+        "title": "The job board",
+        "note": "Burnt is cost against a fixed quote. Anything at 80%+ and unfinished needs a decision today.",
+        "sql": "select ref, customer || case when on_stop then ' [STOP]' else '' end as customer, title as job, status, case when promised_on is null then 'open' else to_char(promised_on, 'YYYY-MM-DD') || case when days_late > 0 then ' (' || days_late || 'd LATE)' else '' end end as promised, case when charge_basis = 'fixed' then to_char(quoted_cents / 100.0, 'FM$999,999,990') else 'T&M' end as quoted, case when total_cost_cents > 0 then to_char(total_cost_cents / 100.0, 'FM$999,999,990') else '' end as cost, case when quote_burnt_pct is not null then quote_burnt_pct || '%' else '' end as burnt, case when uninvoiced_cents > 0 then to_char(uninvoiced_cents / 100.0, 'FM$999,999,990') else '' end as to_bill from v_job_board order by case status when 'in-progress' then 0 when 'accepted' then 1 when 'on-hold' then 2 else 3 end, promised_on nulls last"
+      },
+      {
+        "title": "Shortages",
+        "note": "Planned material the shelf cannot cover, with what is coming and when.",
+        "sql": "select ref as job, customer, to_char(promised_on, 'YYYY-MM-DD') as promised, item_code as code, item, still_needed as needed, free, short_qty as short, on_order, coalesce(to_char(next_delivery_on, 'YYYY-MM-DD'), 'NOTHING COMING') as due_in from v_shortages order by promised_on nulls last"
+      },
+      {
+        "title": "Work centres, last 28 days",
+        "note": "An overdue service is a compliance item (HSWA 2015 s 36), not a preference.",
+        "sql": "select code, name as centre, hours_28d as hours, loading_pct || '%' as loading, to_char(last_service_on, 'YYYY-MM-DD') as serviced, case when service_overdue then 'OVERDUE' else 'ok' end as service from v_loading order by code"
+      },
+      {
+        "title": "Labour, last 7 days",
+        "sql": "select full_name as who, role, hours_7d as booked, weekly_hours as capacity, coalesce(recovery_pct || '%', '') as recovery, case when charge_7d_cents > 0 then to_char(charge_7d_cents / 100.0, 'FM$999,999,990') else '' end as charge_value, coalesce(to_char(last_booked_on, 'YYYY-MM-DD'), 'never') as last_booked from v_labour_week order by full_name"
+      }
+    ]
+  },
+  {
+    "name": "money",
+    "title": "The money",
+    "subtitle": "Work in progress, open quotes, debtors, retentions and customer exposure. Rendered by npm run view.",
+    "sections": [
+      {
+        "title": "Work in progress",
+        "note": "Cost sitting in open jobs against what is billed: the month-end number, live.",
+        "sql": "select jc.ref, c.name as customer, jc.title as job, jc.status, case when jc.total_cost_cents > 0 then to_char(jc.total_cost_cents / 100.0, 'FM$999,999,990') else '' end as cost_in_job, case when jc.invoiced_cents > 0 then to_char(jc.invoiced_cents / 100.0, 'FM$999,999,990') else '' end as invoiced, case when jc.total_cost_cents - jc.invoiced_cents > 0 then to_char((jc.total_cost_cents - jc.invoiced_cents) / 100.0, 'FM$999,999,990') else '' end as cost_unbilled, case when jc.uninvoiced_cents > 0 then to_char(jc.uninvoiced_cents / 100.0, 'FM$999,999,990') else '' end as left_to_bill from v_job_cost jc join customers c on c.id = jc.customer_id where jc.status in ('accepted', 'in-progress', 'on-hold', 'complete') order by jc.total_cost_cents - jc.invoiced_cents desc"
+      },
+      {
+        "title": "Open quotes",
+        "sql": "select ref, customer, title as job, to_char(quoted_cents / 100.0, 'FM$999,999,990') as value, to_char(quoted_on, 'YYYY-MM-DD') as quoted, days_out, coalesce(to_char(last_contact_on, 'YYYY-MM-DD'), 'never') as last_contact from v_quotes order by days_out desc"
+      },
+      {
+        "title": "Debtors",
+        "sql": "select number, customer, ref as job, to_char(total_cents / 100.0, 'FM$999,999,990') as total, case when payment_claim then 'PC' else '' end as claim, status, to_char(due_on, 'YYYY-MM-DD') as due, case when status = 'draft' then 'NOT SENT' else bucket end as aged from v_debtors order by days_overdue desc"
+      },
+      {
+        "title": "Retentions",
+        "note": "Money of yours being held. It is trust money (CCA 2002 subpart 2A), and it comes back to the people who ask.",
+        "sql": "select number as invoice, ref as job, customer, to_char(retention_cents / 100.0, 'FM$999,999,990') as held, coalesce(to_char(retention_due_on, 'YYYY-MM-DD'), 'no date set') as due_back, coalesce(to_char(retention_received_on, 'YYYY-MM-DD'), '') as received, coalesce(days_overdue || 'd', '') as overdue from v_retentions order by retention_due_on nulls last"
+      },
+      {
+        "title": "Customer exposure",
+        "note": "Owing plus the WIP on their open jobs, against the credit limit.",
+        "sql": "select customer || case when on_stop then ' [STOP]' else '' end as customer, account_type, open_jobs, case when owing_cents > 0 then to_char(owing_cents / 100.0, 'FM$999,999,990') else '' end as owing, case when wip_cents > 0 then to_char(wip_cents / 100.0, 'FM$999,999,990') else '' end as wip, case when exposure_cents > 0 then to_char(exposure_cents / 100.0, 'FM$999,999,990') else '' end as exposure, case when credit_limit_cents is null then '' else to_char(credit_limit_cents / 100.0, 'FM$999,999,990') || case when exposure_cents > credit_limit_cents then ' OVER' else '' end end as limit_, case when ppsr_registered_on is not null then to_char(ppsr_registered_on, 'YYYY-MM-DD') when owing_cents >= 1000000 then 'NOT REGISTERED' else '' end as ppsr from v_customer_position where status = 'active' and (exposure_cents > 0 or open_jobs > 0) order by exposure_cents desc"
       }
     ]
   }
